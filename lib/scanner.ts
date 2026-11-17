@@ -122,6 +122,12 @@ class HopUnreachableError extends Error {
 
 type AddressVerdict = "public" | "none" | "blocked" | "timeout" | "dns_error";
 
+export async function validateScanDomain(rawInput: string): Promise<string> {
+  const domain = normalizeDomain(rawInput);
+  await assertPublicTarget(domain, AbortSignal.timeout(SCAN_TIMEOUT_MS));
+  return domain;
+}
+
 export async function scanDomain(rawInput: string): Promise<ScanReport> {
   const domain = normalizeDomain(rawInput);
   const timeout = AbortSignal.timeout(SCAN_TIMEOUT_MS);
@@ -129,21 +135,7 @@ export async function scanDomain(rawInput: string): Promise<ScanReport> {
   const signal = AbortSignal.any([timeout, stop.signal]);
 
   try {
-    const verdict = await addressVerdict(domain, signal);
-    if (verdict === "timeout") {
-      throw new ScanError("The scan timed out.", 504, "timeout");
-    }
-    if (verdict === "blocked") {
-      throw new ScanError(BLOCKED_MESSAGE, 400, "blocked_target");
-    }
-    if (verdict === "dns_error") {
-      throw new ScanError(
-        "Could not verify that this domain points at a public address.",
-        400,
-        "invalid_domain",
-      );
-    }
-
+    const verdict = await assertPublicTarget(domain, signal);
     const httpEnabled = verdict === "public";
     const spfPromise = checkSpf(domain, signal);
     const dmarcPromise = checkDmarc(domain, signal);
@@ -178,6 +170,24 @@ export async function scanDomain(rawInput: string): Promise<ScanReport> {
   } finally {
     stop.abort();
   }
+}
+
+async function assertPublicTarget(domain: string, signal: AbortSignal): Promise<AddressVerdict> {
+  const verdict = await addressVerdict(domain, signal);
+  if (verdict === "timeout") {
+    throw new ScanError("The scan timed out.", 504, "timeout");
+  }
+  if (verdict === "blocked") {
+    throw new ScanError(BLOCKED_MESSAGE, 400, "blocked_target");
+  }
+  if (verdict === "dns_error") {
+    throw new ScanError(
+      "Could not verify that this domain points at a public address.",
+      400,
+      "invalid_domain",
+    );
+  }
+  return verdict;
 }
 
 function normalizeDomain(rawInput: string): string {

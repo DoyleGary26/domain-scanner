@@ -3,6 +3,17 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import type { CheckStatus, Grade } from "@/lib/scanner";
 
+type FixSection = {
+  title: string;
+  explanation: string;
+  config: string;
+};
+
+type FixGuide = {
+  summary: string;
+  sections: FixSection[];
+};
+
 type AuditCheck = {
   id: string;
   category: string;
@@ -45,26 +56,104 @@ const STATUS_LABEL: Record<CheckStatus, string> = {
 
 export default function Home() {
   const inputId = useId();
-  const titleId = useId();
-  const dialogRef = useRef<HTMLDialogElement>(null);
   const resultsRef = useRef<HTMLElement>(null);
   const [domain, setDomain] = useState("");
   const [report, setReport] = useState<AuditReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [unlockOpen, setUnlockOpen] = useState(false);
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [paid, setPaid] = useState(false);
+  const [fixGuide, setFixGuide] = useState<FixGuide | null>(null);
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
   useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (unlockOpen && !dialog.open) dialog.showModal();
-    if (!unlockOpen && dialog.open) dialog.close();
-  }, [unlockOpen]);
+    const sessionId = new URLSearchParams(window.location.search).get("session_id");
+    if (!sessionId) return;
+
+    let cancelled = false;
+    setVerifying(true);
+    setError(null);
+
+    async function unlock() {
+      try {
+        const response = await fetch("/api/unlock", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ sessionId }),
+        });
+        const payload: unknown = await response.json().catch(() => null);
+        if (cancelled) return;
+        if (!response.ok) {
+          setError(readError(payload, response.status));
+          return;
+        }
+        const unlocked = readUnlock(payload);
+        if (!unlocked) {
+          setError("The fix report could not be read.");
+          return;
+        }
+        setReport(unlocked.report);
+        setDomain(unlocked.report.domain);
+        setFixGuide(unlocked.guide);
+        setPaid(true);
+        const url = new URL(window.location.href);
+        url.searchParams.delete("session_id");
+        window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+      } catch {
+        if (!cancelled) setError("The fix report could not be completed.");
+      } finally {
+        if (!cancelled) setVerifying(false);
+      }
+    }
+
+    void unlock();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!report) return;
     resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [report]);
+
+  async function onUnlock() {
+    if (!report || checkoutLoading || verifying) return;
+    setCheckoutLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch("/api/checkout", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ domain: report.domain }),
+      });
+      const payload: unknown = await response.json().catch(() => null);
+      const url = readCheckoutUrl(payload);
+      if (!response.ok || !url) {
+        setError(readError(payload, response.status));
+        setCheckoutLoading(false);
+        return;
+      }
+      window.location.assign(url);
+    } catch {
+      setError("Checkout could not be started.");
+      setCheckoutLoading(false);
+    }
+  }
+
+  async function copyConfig(index: number, config: string) {
+    try {
+      await navigator.clipboard.writeText(config);
+      setCopiedIndex(index);
+      window.setTimeout(() => {
+        setCopiedIndex((current) => (current === index ? null : current));
+      }, 1600);
+    } catch {
+      setError("The config could not be copied.");
+    }
+  }
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -74,6 +163,9 @@ export default function Home() {
     setLoading(true);
     setError(null);
     setReport(null);
+    setPaid(false);
+    setFixGuide(null);
+    setCopiedIndex(null);
 
     try {
       const response = await fetch("/api/scan", {
@@ -99,20 +191,30 @@ export default function Home() {
     }
   }
 
-  const free = (report?.checks ?? [])
+  const ranked = (report?.checks ?? [])
     .map((check, index) => ({ check, index }))
-    .filter(({ check }) => check.locked !== true)
     .sort(
       (left, right) =>
         STATUS_RANK[left.check.status] - STATUS_RANK[right.check.status] || left.index - right.index,
     )
     .map(({ check }) => check);
-  const locked = report?.checks.filter((check) => check.locked === true) ?? [];
+  const free = ranked.filter((check) => check.locked !== true);
+  const locked = ranked.filter((check) => check.locked === true);
+  const visible = paid ? ranked : free;
 
   return (
     <div className="relative flex min-h-full flex-1 flex-col overflow-hidden bg-background text-foreground">
       <div className="pointer-events-none absolute inset-x-0 top-0 h-80 bg-[radial-gradient(ellipse_at_top,rgba(220,38,38,0.16),transparent_58%)]" />
       <main className="relative mx-auto flex w-full max-w-3xl flex-col gap-10 px-5 py-16 sm:px-8 sm:py-20">
+        {verifying ? (
+          <p
+            role="status"
+            className="rounded-md border border-line bg-card px-4 py-3 text-sm text-zinc-200"
+          >
+            Verifying payment & generating custom fix report...
+          </p>
+        ) : null}
+
         <header className="flex flex-col gap-4">
           <p className="text-xs font-medium tracking-[0.22em] text-accent uppercase">
             Domain hygiene
@@ -181,10 +283,12 @@ export default function Home() {
               </div>
             </div>
 
-            {free.length > 0 ? (
+            {visible.length > 0 ? (
               <div className="flex flex-col gap-3">
-                <h2 className="text-sm font-medium text-zinc-300">Included in the free audit</h2>
-                {free.map((check) => (
+                <h2 className="text-sm font-medium text-zinc-300">
+                  {paid ? "Full audit" : "Included in the free audit"}
+                </h2>
+                {visible.map((check) => (
                   <CheckCard key={check.id} check={check} />
                 ))}
               </div>
@@ -194,20 +298,52 @@ export default function Home() {
               </p>
             )}
 
-            <div className="flex flex-col gap-4 rounded-md border border-line bg-card p-5 shadow-[inset_2px_0_0_#DC2626] sm:flex-row sm:items-center sm:justify-between sm:p-6">
-              <p className="max-w-xl text-sm leading-6 font-medium text-white">
-                Unlock Full Plain-English Fix Guide & Copy-Paste DNS/Server Configs — $9
-              </p>
-              <button
-                type="button"
-                onClick={() => setUnlockOpen(true)}
-                className="h-11 shrink-0 rounded-md bg-white px-4 text-sm font-semibold text-black transition hover:bg-zinc-200"
-              >
-                Unlock for $9
-              </button>
-            </div>
+            {paid && fixGuide ? (
+              <section className="flex flex-col gap-4">
+                <div>
+                  <h2 className="text-lg font-semibold tracking-tight text-white">
+                    Full Remediation & Copy-Paste Config Guide
+                  </h2>
+                  <p className="mt-2 text-sm leading-6 text-zinc-300">{fixGuide.summary}</p>
+                </div>
+                {fixGuide.sections.map((section, index) => (
+                  <article key={`${section.title}-${index}`} className="rounded-md border border-line bg-card p-5">
+                    <div className="flex items-start justify-between gap-4">
+                      <h3 className="text-base font-semibold text-white">{section.title}</h3>
+                      <button
+                        type="button"
+                        onClick={() => void copyConfig(index, section.config)}
+                        className="h-8 shrink-0 rounded-md bg-white px-3 text-xs font-semibold text-black transition hover:bg-zinc-200"
+                      >
+                        {copiedIndex === index ? "Copied" : "Copy"}
+                      </button>
+                    </div>
+                    <p className="mt-3 text-sm leading-6 text-zinc-300">{section.explanation}</p>
+                    <pre className="mt-4 overflow-x-auto rounded-md border border-line bg-background p-3 font-mono text-xs leading-5 whitespace-pre-wrap text-zinc-300">
+                      {section.config}
+                    </pre>
+                  </article>
+                ))}
+              </section>
+            ) : null}
 
-            {locked.length > 0 ? (
+            {paid ? null : (
+              <div className="flex flex-col gap-4 rounded-md border border-line bg-card p-5 shadow-[inset_2px_0_0_#DC2626] sm:flex-row sm:items-center sm:justify-between sm:p-6">
+                <p className="max-w-xl text-sm leading-6 font-medium text-white">
+                  Unlock Full Plain-English Fix Guide & Copy-Paste DNS/Server Configs — $9
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void onUnlock()}
+                  disabled={checkoutLoading || verifying}
+                  className="h-11 shrink-0 rounded-md bg-white px-4 text-sm font-semibold text-black transition hover:bg-zinc-200 disabled:cursor-wait disabled:opacity-70"
+                >
+                  {checkoutLoading ? "Redirecting to checkout…" : "Unlock for $9"}
+                </button>
+              </div>
+            )}
+
+            {!paid && locked.length > 0 ? (
               <div className="flex flex-col gap-3">
                 <h2 className="text-sm font-medium text-zinc-500">Locked preview</h2>
                 <div className="grid gap-3 sm:grid-cols-2">
@@ -232,32 +368,6 @@ export default function Home() {
         </p>
       </footer>
 
-      <dialog
-        ref={dialogRef}
-        aria-labelledby={titleId}
-        onClose={() => setUnlockOpen(false)}
-        onClick={(event) => {
-          if (event.target === event.currentTarget) setUnlockOpen(false);
-        }}
-        className="m-auto w-[min(28rem,calc(100%-2rem))] rounded-md border border-line bg-card p-6 text-foreground shadow-2xl backdrop:bg-black/80"
-      >
-        <h2 id={titleId} className="text-xl font-semibold tracking-tight text-white">
-          Full fix guide
-        </h2>
-        <p className="mt-3 text-sm leading-6 text-zinc-400">
-          Payment is not connected yet. When it is, $9 unlocks the plain-English fix guide and
-          copy-paste DNS and server configs for every check.
-        </p>
-        <div className="mt-6 flex justify-end">
-          <button
-            type="button"
-            onClick={() => setUnlockOpen(false)}
-            className="h-10 rounded-md bg-white px-4 text-sm font-semibold text-black"
-          >
-            Close
-          </button>
-        </div>
-      </dialog>
     </div>
   );
 }
@@ -327,8 +437,48 @@ function readError(payload: unknown, status: number): string {
     return payload.error;
   }
   if (status === 504) return "The scan timed out.";
+  if (status === 403) return "Payment could not be verified.";
   if (status === 400) return "Enter a public domain like example.com.";
   return "The scan could not be completed.";
+}
+
+function readCheckoutUrl(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object" || !("url" in payload) || typeof payload.url !== "string") {
+    return null;
+  }
+  try {
+    const url = new URL(payload.url);
+    if (url.protocol !== "https:" || url.hostname !== "checkout.stripe.com") return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function readUnlock(payload: unknown): { report: AuditReport; guide: FixGuide } | null {
+  if (!payload || typeof payload !== "object") return null;
+  if (!("scanResult" in payload) || !("fixGuide" in payload)) return null;
+  const report = toAuditReport(payload.scanResult);
+  const guide = toFixGuide(payload.fixGuide);
+  if (!report || !guide) return null;
+  return { report, guide };
+}
+
+function toFixGuide(value: unknown): FixGuide | null {
+  if (!value || typeof value !== "object") return null;
+  if (!("summary" in value) || typeof value.summary !== "string" || !value.summary.trim()) return null;
+  if (!("sections" in value) || !Array.isArray(value.sections)) return null;
+  const sections: FixSection[] = [];
+  for (const item of value.sections) {
+    if (!item || typeof item !== "object") return null;
+    if (!("title" in item) || typeof item.title !== "string" || !item.title.trim()) return null;
+    if (!("explanation" in item) || typeof item.explanation !== "string" || !item.explanation.trim()) {
+      return null;
+    }
+    if (!("config" in item) || typeof item.config !== "string" || !item.config.trim()) return null;
+    sections.push({ title: item.title, explanation: item.explanation, config: item.config });
+  }
+  return { summary: value.summary, sections };
 }
 
 function toAuditReport(value: unknown): AuditReport | null {
