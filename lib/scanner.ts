@@ -2,6 +2,9 @@ import { resolve4, resolve6, resolveTxt } from "node:dns/promises";
 import { domainToASCII } from "node:url";
 
 const SCAN_TIMEOUT_MS = 8000;
+const MAX_REDIRECTS = 3;
+const MAX_BODY_BYTES = 1_048_576;
+const SPF_LOOKUP_LIMIT = 10;
 
 const SCORE = {
   spf: { pass: 15, warn: 7 },
@@ -359,6 +362,17 @@ async function checkSpf(domain: string, signal: AbortSignal): Promise<ScanCheck>
   }
 
   const record = spf[0] ?? "";
+  const lookups = countSpfDnsMechanisms(record);
+  if (lookups > SPF_LOOKUP_LIMIT) {
+    return makeCheck(
+      "spf",
+      "Email",
+      "SPF Record",
+      "warn",
+      clip(record),
+      `This SPF record uses ${lookups} DNS lookups, above the RFC 7208 limit of ${SPF_LOOKUP_LIMIT}, so receivers may reject the policy.`,
+    );
+  }
   const qualifier = firstAllQualifier(record);
   if (qualifier === "-" || qualifier === "~") {
     return makeCheck(
@@ -391,6 +405,29 @@ async function checkSpf(domain: string, signal: AbortSignal): Promise<ScanCheck>
     clip(record),
     "SPF is published, but it never says what to do with senders that are not listed.",
   );
+}
+
+function countSpfDnsMechanisms(record: string): number {
+  let count = 0;
+  for (const term of record.trim().split(/\s+/)) {
+    const bare = term.replace(/^[+\-~?]/, "").toLowerCase();
+    if (
+      bare.startsWith("include:") ||
+      bare === "a" ||
+      bare.startsWith("a:") ||
+      bare.startsWith("a/") ||
+      bare === "mx" ||
+      bare.startsWith("mx:") ||
+      bare.startsWith("mx/") ||
+      bare === "ptr" ||
+      bare.startsWith("ptr:") ||
+      bare.startsWith("exists:") ||
+      bare.startsWith("redirect=")
+    ) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 function firstAllQualifier(record: string): "+" | "-" | "~" | "?" | null {
@@ -499,7 +536,7 @@ async function checkHttps(
     const response = await publicFetch(new URL(`http://${domain}/`), signal, domain);
     const location = response.headers.get("location");
     const status = response.status;
-    void response.body?.cancel().catch(() => undefined);
+    await readBoundedBody(response);
     return gradeHttps(domain, status, location);
   } catch (error) {
     if (error instanceof ScanError) throw error;
@@ -585,7 +622,7 @@ async function checkHeaders(
     const response = await loadHttps(domain, signal);
     if (!response) return headerResults(null, "the HTTPS site did not respond");
     const checks = headerResults(response, null);
-    void response.body?.cancel().catch(() => undefined);
+    await readBoundedBody(response);
     return checks;
   } catch (error) {
     if (error instanceof ScanError) throw error;
@@ -604,7 +641,7 @@ async function loadHttps(domain: string, signal: AbortSignal): Promise<Response 
     throw error;
   }
 
-  for (let hop = 0; hop < 4; hop += 1) {
+  for (let followed = 0; followed < MAX_REDIRECTS; followed += 1) {
     if (response.status < 300 || response.status >= 400) return response;
     const location = response.headers.get("location");
     if (!location) return response;
@@ -614,28 +651,42 @@ async function loadHttps(domain: string, signal: AbortSignal): Promise<Response 
     } catch {
       return response;
     }
-    const nextHost = canonicalHost(target.hostname);
-    if (
-      target.protocol !== "https:" ||
-      !isAllowedHttpUrl(target) ||
-      !isSameSiteHost(nextHost, domain)
-    ) {
-      return response;
-    }
+    if (!isAllowedHttpUrl(target)) return response;
 
     let next: Response;
     try {
       next = await publicFetch(target, signal, domain);
     } catch (error) {
       if (error instanceof HopBlockedError || error instanceof HopUnreachableError) return response;
-      void response.body?.cancel().catch(() => undefined);
+      await readBoundedBody(response);
       throw error;
     }
-    void response.body?.cancel().catch(() => undefined);
+    await readBoundedBody(response);
     response = next;
     current = target;
   }
   return response;
+}
+
+async function readBoundedBody(response: Response): Promise<void> {
+  const body = response.body;
+  if (!body) return;
+  const reader = body.getReader();
+  let received = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      received += value.byteLength;
+      if (received > MAX_BODY_BYTES) {
+        await reader.cancel();
+        return;
+      }
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    if (isTimeoutError(error)) throw error;
+  }
 }
 
 async function publicFetch(url: URL, signal: AbortSignal, originalDomain: string): Promise<Response> {
@@ -1088,11 +1139,16 @@ function isNonPublicIpv6(groups: number[]): boolean {
   if ((g0 & 0xffc0) === 0xfe80) return true;
   if ((g0 & 0xffc0) === 0xfec0) return true;
   if ((g0 & 0xff00) === 0xff00) return true;
-  const embedded =
-    (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0xffff) ||
-    (g0 === 0x64 && g1 === 0xff9b && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0);
-  if (embedded) return isNonPublicIpv4(((g6 << 16) | g7) >>> 0);
+  if (isIpv4Mapped(g0, g1, g2, g3, g4, g5)) {
+    return isNonPublicIpv4(((g6 << 16) | g7) >>> 0);
+  }
+  const nat64 = g0 === 0x64 && g1 === 0xff9b && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0;
+  if (nat64) return isNonPublicIpv4(((g6 << 16) | g7) >>> 0);
   return false;
+}
+
+function isIpv4Mapped(g0: number, g1: number, g2: number, g3: number, g4: number, g5: number): boolean {
+  return g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0xffff;
 }
 
 function isTimeoutError(error: unknown): boolean {

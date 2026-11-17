@@ -1,7 +1,25 @@
 "use client";
 
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import type { CheckStatus, Grade, ScanCheck, ScanReport } from "@/lib/scanner";
+import type { CheckStatus, Grade } from "@/lib/scanner";
+
+type AuditCheck = {
+  id: string;
+  category: string;
+  title: string;
+  status: CheckStatus;
+  locked?: boolean;
+  rawValue?: string | null;
+  impactSummary?: string;
+};
+
+type AuditReport = {
+  domain: string;
+  score: number;
+  grade: Grade;
+  scannedAt: string;
+  checks: AuditCheck[];
+};
 
 const STATUS_RANK: Record<CheckStatus, number> = { fail: 0, warn: 1, pass: 2 };
 
@@ -31,7 +49,7 @@ export default function Home() {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const resultsRef = useRef<HTMLElement>(null);
   const [domain, setDomain] = useState("");
-  const [report, setReport] = useState<ScanReport | null>(null);
+  const [report, setReport] = useState<AuditReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [unlockOpen, setUnlockOpen] = useState(false);
@@ -68,11 +86,12 @@ export default function Home() {
         setError(readError(payload, response.status));
         return;
       }
-      if (!isReport(payload)) {
+      const nextReport = toAuditReport(payload);
+      if (!nextReport) {
         setError("The scan returned an unexpected result.");
         return;
       }
-      setReport(payload);
+      setReport(nextReport);
     } catch {
       setError("The scan could not be completed.");
     } finally {
@@ -80,10 +99,15 @@ export default function Home() {
     }
   }
 
-  const ranked = report ? rankIssues(report.checks) : [];
-  const free = ranked.slice(0, 2);
-  const freeIds = new Set(free.map((check) => check.id));
-  const locked = report?.checks.filter((check) => !freeIds.has(check.id)) ?? [];
+  const free = (report?.checks ?? [])
+    .map((check, index) => ({ check, index }))
+    .filter(({ check }) => check.locked !== true)
+    .sort(
+      (left, right) =>
+        STATUS_RANK[left.check.status] - STATUS_RANK[right.check.status] || left.index - right.index,
+    )
+    .map(({ check }) => check);
+  const locked = report?.checks.filter((check) => check.locked === true) ?? [];
 
   return (
     <div className="relative flex min-h-full flex-1 flex-col overflow-hidden bg-background text-foreground">
@@ -202,7 +226,10 @@ export default function Home() {
       </main>
 
       <footer className="mt-auto border-t border-line px-5 py-6 text-center text-xs text-zinc-500">
-        Built by DriftLogic — Stateless Domain & Email Security Diagnostics.
+        <p>Built by DriftLogic — Stateless Domain & Email Security Diagnostics.</p>
+        <p className="mt-1">
+          Diagnostic results are informational only and do not constitute a security guarantee.
+        </p>
       </footer>
 
       <dialog
@@ -235,7 +262,7 @@ export default function Home() {
   );
 }
 
-function CheckCard({ check }: { check: ScanCheck }) {
+function CheckCard({ check }: { check: AuditCheck }) {
   return (
     <article className="rounded-md border border-line bg-card p-5">
       <div className="flex items-start justify-between gap-4">
@@ -245,7 +272,7 @@ function CheckCard({ check }: { check: ScanCheck }) {
         </div>
         <StatusPill status={check.status} />
       </div>
-      <p className="mt-3 text-sm leading-6 text-zinc-300">{check.impactSummary}</p>
+      <p className="mt-3 text-sm leading-6 text-zinc-300">{check.impactSummary ?? ""}</p>
       {check.rawValue ? (
         <pre className="mt-4 overflow-x-auto rounded-md border border-line bg-background p-3 font-mono text-xs leading-5 break-all whitespace-pre-wrap text-zinc-300">
           {check.rawValue}
@@ -257,11 +284,17 @@ function CheckCard({ check }: { check: ScanCheck }) {
   );
 }
 
-function LockedCard({ check }: { check: ScanCheck }) {
+function LockedCard({ check }: { check: AuditCheck }) {
   return (
     <article className="relative overflow-hidden rounded-md border border-line bg-card">
       <div className="pointer-events-none blur-[6px] select-none" aria-hidden="true">
-        <CheckCard check={check} />
+        <div className="flex items-start justify-between gap-4 p-5">
+          <div>
+            <p className="text-xs tracking-[0.16em] text-zinc-500 uppercase">{check.category}</p>
+            <h3 className="mt-1 text-lg font-semibold text-white">{check.title}</h3>
+          </div>
+          <StatusPill status={check.status} />
+        </div>
       </div>
       <div className="absolute inset-0 flex items-center justify-center">
         <span className="rounded-md border border-accent/70 bg-background/90 px-3 py-1 text-xs font-medium tracking-[0.14em] text-accent uppercase">
@@ -278,18 +311,6 @@ function StatusPill({ status }: { status: CheckStatus }) {
       {STATUS_LABEL[status]}
     </span>
   );
-}
-
-function rankIssues(checks: ScanCheck[]): ScanCheck[] {
-  return checks
-    .map((check, index) => ({ check, index }))
-    .filter(({ check }) => check.status !== "pass")
-    .sort(
-      (left, right) =>
-        STATUS_RANK[left.check.status] - STATUS_RANK[right.check.status] || left.index - right.index,
-    )
-    .slice(0, 2)
-    .map(({ check }) => check);
 }
 
 function formatWhen(value: string): string {
@@ -310,18 +331,49 @@ function readError(payload: unknown, status: number): string {
   return "The scan could not be completed.";
 }
 
-function isReport(value: unknown): value is ScanReport {
-  if (!value || typeof value !== "object") return false;
-  const report = value as ScanReport;
-  return (
-    typeof report.domain === "string" &&
-    typeof report.score === "number" &&
-    (report.grade === "A" ||
-      report.grade === "B" ||
-      report.grade === "C" ||
-      report.grade === "D" ||
-      report.grade === "F") &&
-    typeof report.scannedAt === "string" &&
-    Array.isArray(report.checks)
-  );
+function toAuditReport(value: unknown): AuditReport | null {
+  if (!value || typeof value !== "object") return null;
+  const report = value as AuditReport;
+  if (typeof report.domain !== "string" || typeof report.score !== "number") return null;
+  if (report.grade !== "A" && report.grade !== "B" && report.grade !== "C" && report.grade !== "D" && report.grade !== "F") {
+    return null;
+  }
+  if (typeof report.scannedAt !== "string" || !Array.isArray(report.checks)) return null;
+  const checks = report.checks.map(toAuditCheck);
+  if (checks.some((check) => check === null)) return null;
+  return {
+    domain: report.domain,
+    score: report.score,
+    grade: report.grade,
+    scannedAt: report.scannedAt,
+    checks: checks.filter((check): check is AuditCheck => check !== null),
+  };
+}
+
+function toAuditCheck(value: unknown): AuditCheck | null {
+  if (!value || typeof value !== "object") return null;
+  const check = value as AuditCheck;
+  if (typeof check.id !== "string" || typeof check.category !== "string" || typeof check.title !== "string") {
+    return null;
+  }
+  if (check.status !== "pass" && check.status !== "warn" && check.status !== "fail") return null;
+  if (check.locked === true) {
+    return {
+      id: check.id,
+      category: check.category,
+      title: check.title,
+      status: check.status,
+      locked: true,
+    };
+  }
+  if (typeof check.impactSummary !== "string") return null;
+  if (check.rawValue !== null && typeof check.rawValue !== "string" && check.rawValue !== undefined) return null;
+  return {
+    id: check.id,
+    category: check.category,
+    title: check.title,
+    status: check.status,
+    rawValue: typeof check.rawValue === "string" ? check.rawValue : null,
+    impactSummary: check.impactSummary,
+  };
 }
