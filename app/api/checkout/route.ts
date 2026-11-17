@@ -1,4 +1,4 @@
-import { getStripe, requestOrigin } from "@/lib/stripe";
+import { CheckoutOriginError, getStripe, requestOrigin } from "@/lib/stripe";
 import { ScanError, validateScanDomain } from "@/lib/scanner";
 
 const PRODUCT_NAME = "Full Domain & Email Security Fix Report";
@@ -32,9 +32,19 @@ export async function POST(request: Request) {
     return Response.json({ error: "The domain could not be checked." }, { status: 500 });
   }
 
+  let origin: string;
+  try {
+    origin = requestOrigin(request);
+  } catch (error) {
+    if (error instanceof CheckoutOriginError) {
+      return Response.json({ error: error.message }, { status: error.status });
+    }
+    console.error(error);
+    return Response.json({ error: "Checkout could not be started." }, { status: 500 });
+  }
+
   try {
     const stripe = getStripe();
-    const origin = requestOrigin(request);
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       line_items: [
