@@ -47,6 +47,7 @@ export async function POST(request: Request) {
     const stripe = getStripe();
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
+      managed_payments: { enabled: false },
       line_items: [
         {
           quantity: 1,
