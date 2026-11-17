@@ -86,7 +86,7 @@ export default function Home() {
   const locked = report?.checks.filter((check) => !freeIds.has(check.id)) ?? [];
 
   return (
-    <div className="relative min-h-full flex-1 overflow-hidden bg-background text-foreground">
+    <div className="relative flex min-h-full flex-1 flex-col overflow-hidden bg-background text-foreground">
       <div className="pointer-events-none absolute inset-x-0 top-0 h-80 bg-[radial-gradient(ellipse_at_top,rgba(220,38,38,0.16),transparent_58%)]" />
       <main className="relative mx-auto flex w-full max-w-3xl flex-col gap-10 px-5 py-16 sm:px-8 sm:py-20">
         <header className="flex flex-col gap-4">
@@ -200,6 +200,10 @@ export default function Home() {
           Nothing is stored. Each scan runs once and the result stays in this browser.
         </p>
       </main>
+
+      <footer className="mt-auto border-t border-line px-5 py-6 text-center text-xs text-zinc-500">
+        Built by DriftLogic — Stateless Domain & Email Security Diagnostics.
+      </footer>
 
       <dialog
         ref={dialogRef}
