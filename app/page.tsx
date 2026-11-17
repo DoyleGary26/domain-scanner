@@ -6,17 +6,17 @@ import type { CheckStatus, Grade, ScanCheck, ScanReport } from "@/lib/scanner";
 const STATUS_RANK: Record<CheckStatus, number> = { fail: 0, warn: 1, pass: 2 };
 
 const GRADE_STYLE: Record<Grade, string> = {
-  A: "border-emerald-300/40 bg-emerald-300/10 text-emerald-100",
-  B: "border-lime-300/40 bg-lime-300/10 text-lime-100",
-  C: "border-amber-300/40 bg-amber-300/10 text-amber-50",
-  D: "border-orange-300/40 bg-orange-300/10 text-orange-50",
-  F: "border-rose-300/40 bg-rose-300/10 text-rose-50",
+  A: "border-zinc-100 bg-card text-white",
+  B: "border-zinc-400 bg-card text-zinc-100",
+  C: "border-amber-700 bg-card text-amber-100",
+  D: "border-orange-800 bg-card text-orange-100",
+  F: "border-accent bg-accent/10 text-accent",
 };
 
 const STATUS_STYLE: Record<CheckStatus, string> = {
-  pass: "bg-emerald-300/15 text-emerald-100",
-  warn: "bg-amber-300/15 text-amber-50",
-  fail: "bg-rose-300/15 text-rose-50",
+  pass: "border border-line bg-zinc-100/10 text-zinc-100",
+  warn: "border border-amber-700 bg-amber-950/40 text-amber-100",
+  fail: "border border-accent bg-accent text-white",
 };
 
 const STATUS_LABEL: Record<CheckStatus, string> = {
@@ -86,11 +86,11 @@ export default function Home() {
   const locked = report?.checks.filter((check) => !freeIds.has(check.id)) ?? [];
 
   return (
-    <div className="relative min-h-full flex-1 overflow-hidden bg-[#090b10] text-zinc-100">
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-80 bg-[radial-gradient(ellipse_at_top,rgba(167,243,208,0.14),transparent_62%)]" />
+    <div className="relative min-h-full flex-1 overflow-hidden bg-background text-foreground">
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-80 bg-[radial-gradient(ellipse_at_top,rgba(220,38,38,0.16),transparent_58%)]" />
       <main className="relative mx-auto flex w-full max-w-3xl flex-col gap-10 px-5 py-16 sm:px-8 sm:py-20">
         <header className="flex flex-col gap-4">
-          <p className="text-xs font-medium tracking-[0.22em] text-emerald-200/80 uppercase">
+          <p className="text-xs font-medium tracking-[0.22em] text-accent uppercase">
             Domain hygiene
           </p>
           <div className="flex flex-col gap-3">
@@ -117,12 +117,12 @@ export default function Home() {
             spellCheck={false}
             inputMode="url"
             maxLength={2048}
-            className="h-14 min-w-0 flex-1 rounded-2xl border border-white/10 bg-white/[0.04] px-4 font-mono text-base text-white outline-none placeholder:text-zinc-500 focus:border-emerald-200/50"
+            className="h-14 min-w-0 flex-1 rounded-md border border-line bg-card px-4 font-mono text-base text-white outline-none placeholder:text-zinc-500 focus:border-accent"
           />
           <button
             type="submit"
             disabled={loading || domain.trim().length === 0}
-            className="h-14 shrink-0 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:bg-white/40"
+            className={`h-14 shrink-0 rounded-md bg-white px-5 text-sm font-semibold text-black transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:bg-white/40 ${loading ? "ring-1 ring-accent" : ""}`}
           >
             {loading ? "Scanning…" : "Run Free Security Audit"}
           </button>
@@ -131,7 +131,7 @@ export default function Home() {
         {error ? (
           <p
             role="alert"
-            className="rounded-2xl border border-rose-300/30 bg-rose-300/10 px-4 py-3 text-sm leading-6 text-rose-50"
+            className="rounded-md border border-accent/50 bg-accent/10 px-4 py-3 text-sm leading-6 text-white"
           >
             {error}
           </p>
@@ -139,15 +139,15 @@ export default function Home() {
 
         {report ? (
           <section ref={resultsRef} aria-live="polite" className="flex flex-col gap-6">
-            <div className="flex items-center gap-5 rounded-3xl border border-white/10 bg-white/[0.03] p-5 sm:p-6">
+            <div className="flex items-center gap-5 rounded-md border border-line bg-card p-5 sm:p-6">
               <div
-                className={`flex h-24 w-24 shrink-0 items-center justify-center rounded-3xl border text-5xl font-semibold tracking-tight ${GRADE_STYLE[report.grade]}`}
+                className={`flex h-24 w-24 shrink-0 items-center justify-center rounded-md border text-5xl font-semibold tracking-tight ${GRADE_STYLE[report.grade]}`}
                 aria-label={`Grade ${report.grade}`}
               >
                 {report.grade}
               </div>
               <div className="min-w-0">
-                <p className="text-sm text-zinc-400">Score</p>
+                <p className="text-sm tracking-[0.16em] text-accent uppercase">Score</p>
                 <p className="text-3xl font-semibold tracking-tight text-white tabular-nums">
                   {report.score}
                   <span className="text-lg font-medium text-zinc-500"> / 100</span>
@@ -170,14 +170,14 @@ export default function Home() {
               </p>
             )}
 
-            <div className="flex flex-col gap-4 rounded-3xl border border-emerald-200/20 bg-emerald-200/[0.06] p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
-              <p className="max-w-xl text-sm leading-6 font-medium text-emerald-50">
+            <div className="flex flex-col gap-4 rounded-md border border-line bg-card p-5 shadow-[inset_2px_0_0_#DC2626] sm:flex-row sm:items-center sm:justify-between sm:p-6">
+              <p className="max-w-xl text-sm leading-6 font-medium text-white">
                 Unlock Full Plain-English Fix Guide & Copy-Paste DNS/Server Configs — $9
               </p>
               <button
                 type="button"
                 onClick={() => setUnlockOpen(true)}
-                className="h-11 shrink-0 rounded-full bg-emerald-200 px-4 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-100"
+                className="h-11 shrink-0 rounded-md bg-white px-4 text-sm font-semibold text-black transition hover:bg-zinc-200"
               >
                 Unlock for $9
               </button>
@@ -208,7 +208,7 @@ export default function Home() {
         onClick={(event) => {
           if (event.target === event.currentTarget) setUnlockOpen(false);
         }}
-        className="m-auto w-[min(28rem,calc(100%-2rem))] rounded-3xl border border-white/10 bg-[#10141c] p-6 text-zinc-100 shadow-2xl backdrop:bg-black/70"
+        className="m-auto w-[min(28rem,calc(100%-2rem))] rounded-md border border-line bg-card p-6 text-foreground shadow-2xl backdrop:bg-black/80"
       >
         <h2 id={titleId} className="text-xl font-semibold tracking-tight text-white">
           Full fix guide
@@ -221,7 +221,7 @@ export default function Home() {
           <button
             type="button"
             onClick={() => setUnlockOpen(false)}
-            className="h-10 rounded-full bg-white px-4 text-sm font-semibold text-zinc-950"
+            className="h-10 rounded-md bg-white px-4 text-sm font-semibold text-black"
           >
             Close
           </button>
@@ -233,7 +233,7 @@ export default function Home() {
 
 function CheckCard({ check }: { check: ScanCheck }) {
   return (
-    <article className="rounded-3xl border border-white/10 bg-white/[0.03] p-5">
+    <article className="rounded-md border border-line bg-card p-5">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-xs tracking-[0.16em] text-zinc-500 uppercase">{check.category}</p>
@@ -243,7 +243,7 @@ function CheckCard({ check }: { check: ScanCheck }) {
       </div>
       <p className="mt-3 text-sm leading-6 text-zinc-300">{check.impactSummary}</p>
       {check.rawValue ? (
-        <pre className="mt-4 overflow-x-auto rounded-2xl bg-black/40 p-3 font-mono text-xs leading-5 break-all whitespace-pre-wrap text-zinc-300">
+        <pre className="mt-4 overflow-x-auto rounded-md border border-line bg-background p-3 font-mono text-xs leading-5 break-all whitespace-pre-wrap text-zinc-300">
           {check.rawValue}
         </pre>
       ) : (
@@ -255,12 +255,12 @@ function CheckCard({ check }: { check: ScanCheck }) {
 
 function LockedCard({ check }: { check: ScanCheck }) {
   return (
-    <article className="relative overflow-hidden rounded-3xl border border-white/10 bg-white/[0.03]">
+    <article className="relative overflow-hidden rounded-md border border-line bg-card">
       <div className="pointer-events-none blur-[6px] select-none" aria-hidden="true">
         <CheckCard check={check} />
       </div>
       <div className="absolute inset-0 flex items-center justify-center">
-        <span className="rounded-full border border-white/15 bg-[#090b10]/80 px-3 py-1 text-xs font-medium text-zinc-200">
+        <span className="rounded-md border border-accent/70 bg-background/90 px-3 py-1 text-xs font-medium tracking-[0.14em] text-accent uppercase">
           Locked
         </span>
       </div>
@@ -270,7 +270,7 @@ function LockedCard({ check }: { check: ScanCheck }) {
 
 function StatusPill({ status }: { status: CheckStatus }) {
   return (
-    <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${STATUS_STYLE[status]}`}>
+    <span className={`rounded-md px-2.5 py-1 text-xs font-medium tracking-wide uppercase ${STATUS_STYLE[status]}`}>
       {STATUS_LABEL[status]}
     </span>
   );
